@@ -1,0 +1,144 @@
+import os
+import gradio as gr
+from PIL import Image, ImageDraw
+import numpy as np
+import torch
+from torchvision import transforms, models
+from torch import nn
+from ultralytics import YOLO
+
+# --- KONFIGURASI MODEL YOLO ---
+path_model_yolo = os.path.join('best_yolov8s_tb_e50_b8.pt')
+class_names_yolo = ['tb'] 
+tb_class_id_yolo = 0 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# --- KONFIGURASI MODEL ViT ---
+PATH_MODEL_ViT = os.path.join('vit_model.pth')
+NUM_CLASSES_ViT = 3
+CLASS_NAMES_ViT = ['healthy', 'sick_bu_no_tb', 'tb'] 
+TB_CLASS_ID_ViT = 2 
+
+# --- MODEL ViT Preprocessing ---
+transform_vit = transforms.Compose([
+    transforms.Resize((224, 224)), 
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) 
+])
+
+# --- CEK DEVICE (GPU/CPU) ---
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Aplikasi akan berjalan di: {device}")
+
+# --- MUAT MODEL YOLO ---
+model_yolo = None
+try:
+    model_yolo = YOLO(path_model_yolo)
+    print(f"Model YOLO '{path_model_yolo}' berhasil dimuat!")
+except Exception as e:
+    print(f"ERROR: gagal memuat model YOLO: {e}")
+    model_yolo = None
+
+# --- MUAT MODEL ViT --
+model_vit = None
+try:
+    model_vit = models.vit_b_16(pretrained=False) 
+  
+    model_vit.heads.head = nn.Linear(model_vit.heads.head.in_features, NUM_CLASSES_ViT)
+    
+    model_vit.load_state_dict(torch.load(PATH_MODEL_ViT, map_location=device))
+    
+    model_vit.eval() 
+    model_vit.to(device) 
+    print(f"Model ViT '{PATH_MODEL_ViT}' berhasil dimuat!")
+except Exception as e:
+    print(f"ERROR: Gagal memuat model ViT dari '{PATH_MODEL_ViT}'. Pastikan path benar, arsitektur cocok, dan file ada. Error: {e}")
+    model_vit = None
+
+def predict_xray_real(image_path):
+    if model_yolo is None or model_vit is None:
+        return "Model tidak dapat dimuat. Silakan periksa konfigurasi dan log error.", 0.0, None, "Error Model"
+   
+    if image_path is None:
+        return "Mohon unggah gambar X-ray.", 0.0, None, "Belum Ada Prediksi"
+
+    try:
+        original_image = image_path.convert("RGB")
+        image_with_bbox = original_image.copy()
+        draw = ImageDraw.Draw(image_with_bbox) 
+
+        # PANGGIL ViT
+        input_tensor_vit = transform_vit(original_image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            output_vit = model_vit(input_tensor_vit)
+            probabilities_vit = torch.nn.functional.softmax(output_vit, dim=1)[0]
+        
+        # Ambil hasil ViT
+        vit_confidence, vit_class_id = torch.max(probabilities_vit, 0)
+        vit_predicted_label = CLASS_NAMES_ViT[vit_class_id.item()]
+        vit_confidence_percent = vit_confidence.item() * 100
+        
+        # PANGGIL YOLO 
+        results_yolo = model_yolo(original_image, conf=0.25)
+        detections_yolo = results_yolo[0].boxes
+        detected_tb_boxes = []
+
+        if len(detections_yolo) > 0:
+            for box in detections_yolo:
+                conf_yolo = float(box.conf[0])
+                cls_id_yolo = int(box.cls[0])
+            
+                label_yolo = class_names_yolo[cls_id_yolo]
+
+                if label_yolo == 'tb':
+                    x1, y1, x2, y2 = [int(coord) for coord in box.xyxy[0]]
+                    draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+                    text_x = x1
+                    text_y = y1 - 20 if y1 - 20 > 0 else y1 + 5
+                    draw.text((text_x, text_y), f"{label_yolo} {conf_yolo:.2f}", fill="red")
+                    detected_tb_boxes.append({'bbox': [x1, y1, x2, y2], 'conf': conf_yolo})
+
+        # LOGIKA KEPUTUSAN AKHIR (GABUNGAN YOLO & ViT)
+
+        overall_classification_text = ""
+        overall_confidence_value = vit_confidence_percent 
+
+        if vit_predicted_label == 'tb':
+            if len(detected_tb_boxes) > 0:
+                overall_classification_text = f"Terdeteksi TBC (ViT: {vit_confidence_percent:.1f}%, YOLO: {len(detected_tb_boxes)} lesi)"
+                
+            else:
+                overall_classification_text = f"Terdeteksi TBC (ViT: {vit_confidence_percent:.1f}%, YOLO: No BBox)"
+                
+        elif vit_predicted_label == 'healthy':
+            overall_classification_text = f"Paru-paru Sehat (ViT: {vit_confidence_percent:.1f}%)"
+        elif vit_predicted_label == 'sick_bu_no_tb':
+            overall_classification_text = f"Sakit Tapi Bukan TBC (ViT: {vit_confidence_percent:.1f}%)"
+        else: 
+            overall_classification_text = f"Klasifikasi ViT: {vit_predicted_label} ({vit_confidence_percent:.1f}%)"
+            
+        return (
+            f"Analisis Selesai! (ViT: {vit_predicted_label} {vit_confidence_percent:.1f}%)",
+            overall_confidence_value,
+            image_with_bbox,
+            overall_classification_text
+        )
+
+    except Exception as e:
+        return f"Terjadi kesalahan saat memproses gambar: {e}", 0.0, None, "Error Pemrosesan"
+
+# --- DEFINISI ANTARMUKA GRADIO ---
+demo = gr.Interface(
+    fn=predict_xray_real,
+    inputs=gr.Image(type="pil", label="Unggah Gambar X-ray Paru-paru (PNG/JPG)"),
+    outputs=[
+        "text",
+        gr.Number(label="Overall Confidence (%)"),
+        gr.Image(type="pil", label="Hasil Analisis X-ray (dengan Bounding Box)"),
+        gr.Textbox(label="Klasifikasi Akhir")
+    ],
+    title="Sistem Prediksi TBC dari X-ray Paru-paru (YOLOv8 + ViT)",
+    description="Unggah citra X-ray paru-paru Anda untuk mendapatkan klasifikasi keseluruhan oleh ViT, deteksi lesi TBC oleh YOLOv8, persentase keyakinan, dan visualisasi bounding box."
+)
+
+demo.launch()
