@@ -84,6 +84,10 @@ Simply upload the X-ray images and it will tell you the probability and if it de
 
 For running the final GUI on your local machine, make sure the .pt weight files are in the same directory as your GUI to make sure it running smoothly
 
+## Notes
+
+To see our Demo Video and Perfomance database, see [drive](https://drive.google.com/drive/folders/1uF9R3L1M5hSjoT9rKVr37sWe1K8KPfCy?usp=sharing) 
+
 ## Built With
 
 - [PyTorch](https://pytorch.org/) - The core deep learning framework.
