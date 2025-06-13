@@ -1,0 +1,18 @@
+{
+    "epoch": 100.0,
+    "time": 10611.7,
+    "train_box_loss": 1.1649,
+    "train_cls_loss": 0.81295,
+    "train_dfl_loss": 1.53373,
+    "metrics_precision_B": 0.80102,
+    "metrics_recall_B": 0.74426,
+    "metrics_mAP50_B": 0.8107,
+    "metrics_mAP50-95_B": 0.3847,
+    "val_box_loss": 1.87891,
+    "val_cls_loss": 1.16833,
+    "val_dfl_loss": 2.2762,
+    "lr_pg0": 3.98e-05,
+    "lr_pg1": 3.98e-05,
+    "lr_pg2": 3.98e-05,
+    "training_duration_sec": 10651.690197706223
+}
